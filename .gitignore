@@ -1,0 +1,39 @@
+# --- OS / editor junk ---
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+.cache/
+.dist-info/
+*.egg-info/
+build/
+dist/
+
+# --- Jupyter ---
+.ipynb_checkpoints/
+
+# --- Tests / coverage ---
+.pytest_cache/
+.coverage
+htmlcov/
+
+# --- Logs / env / secrets ---
+*.log
+.env
+.env.*
+config/*secret*.*
+config/*password*.*
+
+# --- Data (keep repo small) ---
+data/**
+!data/.gitkeep        # keep the directory structure only
