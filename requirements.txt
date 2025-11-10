@@ -3,3 +3,4 @@ numpy
 meteostat
 python-dateutil
 tqdm
+requests
