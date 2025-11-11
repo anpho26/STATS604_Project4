@@ -24,9 +24,13 @@ ZONES = [
 START_TRAIN = "2021-01-01"
 END_TRAIN   = "2025-10-31"   # inclusive
 
+
+TIME_FMT = "%m/%d/%Y %I:%M:%S %p"  # matches '1/1/2016 5:00:00 AM' etc.
+
+
 def parse_pjm_time(s: pd.Series) -> pd.Series:
     # PJM strings look like '1/1/2016 12:00:00 AM'
-    return pd.to_datetime(s, errors="coerce")
+    return pd.to_datetime(s, format=TIME_FMT, errors="coerce")
 
 def load_power() -> pd.DataFrame:
     files = sorted(glob.glob(str(POWER_DIR / "hrl_load_metered_*.csv")))
@@ -37,7 +41,7 @@ def load_power() -> pd.DataFrame:
     for f in files:
         df = pd.read_csv(f, low_memory=False, usecols=["load_area","datetime_beginning_ept","mw"])
         df = df.rename(columns={"load_area":"zone"})
-        df["time_ept"] = pd.to_datetime(df["datetime_beginning_ept"], errors="coerce")
+        df["time_ept"] = pd.to_datetime(df["datetime_beginning_ept"], format=TIME_FMT, errors="coerce")
         df["mw"] = pd.to_numeric(df["mw"], errors="coerce")
         frames.append(df[["zone","time_ept","mw"]])
 
