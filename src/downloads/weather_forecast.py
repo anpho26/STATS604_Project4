@@ -54,6 +54,16 @@ def fetch_openmeteo_hourly(lat: float, lon: float, start: datetime, end: datetim
     for v in hourly_vars:
         d[v] = hz.get(v, [None] * len(times))
     df = pd.DataFrame(d).set_index("time_utc")
+    
+    rename = {
+        "temperature_2m": "temp",
+        "relative_humidity_2m": "rhum",
+        "precipitation": "prcp",
+        "windspeed_10m": "wspd",
+        "pressure_msl": "pres",
+        "weathercode": "coco",
+    }
+    df = df.rename(columns={k: v for k, v in rename.items() if k in df.columns})
     return df
 
 def save_with_pjm_times(df: pd.DataFrame, dest: Path):

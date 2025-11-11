@@ -4,3 +4,6 @@ meteostat
 python-dateutil
 tqdm
 requests
+scikit-learn
+lightgbm
+joblib
