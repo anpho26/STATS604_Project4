@@ -24,6 +24,8 @@ COPY data/raw/weather/            data/raw/weather/
 # (optional) Open-Meteo forecast cache if you keep it
 COPY data/raw/weather_forecast/   data/raw/weather_forecast/
 
+COPY data/raw/zones_locations.csv data/raw/zones_locations.csv  
+
 # --- models/artifacts (optional but recommended to reproduce fast) ---
 # If you have trained models, include them:
 COPY data/models/                 data/models/
