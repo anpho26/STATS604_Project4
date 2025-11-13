@@ -145,7 +145,6 @@ def main():
     all_h = []
     all_p = []
     for z in ZONES:
-        print(f"[forecast] {z}")
         h, p = predict_zone(z, start, end)
         all_h.append(h); all_p.append(p)
 
@@ -157,8 +156,6 @@ def main():
     peaks_out  = PRED_DIR / f"peaks_{start}_{end}.csv"
     hourly.to_csv(hourly_out, index=False)
     peaks.to_csv(peaks_out, index=False)
-    print(f"[forecast] wrote {hourly_out}")
-    print(f"[forecast] wrote {peaks_out}")
 
 if __name__ == "__main__":
     main()

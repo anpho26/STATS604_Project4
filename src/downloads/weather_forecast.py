@@ -108,7 +108,6 @@ def main():
         df = fetch_openmeteo_hourly(r["lat"], r["lon"], start, end)
         dest = OUT_DIR / f"openmeteo_forecast_{r['zone']}_{start.date()}_{end.date()}.csv"
         save_with_pjm_times(df, dest)
-        print(f"[forecast] wrote {dest}")
 
 if __name__ == "__main__":
     main()

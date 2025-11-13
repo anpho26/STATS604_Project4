@@ -30,7 +30,7 @@ help:
 
 # ----- predictions -----
 predictions:
-	$(PY) -m src.print_predictions
+	@$(PY) -m src.print_predictions
 
 # ----- CLEAN -----
 # Keep code and raw data; remove models, predictions, processed/interim, caches, notebooks' checkpoints

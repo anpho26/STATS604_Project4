@@ -141,10 +141,8 @@ def train_zone(zone: str, power: pd.DataFrame):
     dump({"model": model, "features": features}, MODEL_DIR / f"lgbm_zone_{zone}.pkl")
 
 def main():
-    print("[train] loading power …")
     power = load_power()
     for z in ZONES:
-        print(f"[train] zone {z}")
         train_zone(z, power)
     # save a small metadata file
     (MODEL_DIR / "lgbm_meta.json").write_text(json.dumps({
