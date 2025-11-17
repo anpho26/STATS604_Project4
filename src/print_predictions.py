@@ -5,12 +5,11 @@ from zoneinfo import ZoneInfo
 import sys
 import pandas as pd
 
-# 29-zone order (same as baseline)
-from src.baseline_predict import ZONES
+# from src.forecast10days import main as fc_main
+from src.gam_predict import predict_10day_window, ZONES
 
 # call existing modules programmatically
 from src.downloads.weather_forecast import main as wx_main
-from src.forecast10days import main as fc_main
 
 PRED_DIR = Path("data/predictions_10day")
 EASTERN = ZoneInfo("America/New_York")
@@ -22,12 +21,17 @@ def ensure_window(start: str, end: str) -> tuple[Path, Path]:
     hourly = PRED_DIR / f"hourly_{start}_{end}.csv"
     peaks  = PRED_DIR / f"peaks_{start}_{end}.csv"
     if not (hourly.exists() and peaks.exists()):
-        # fetch forecast for all zones (UTC/units handled in module)
+        # 1) fetch forecast for all zones
         sys.argv = ["weather_forecast", start, end, "--all"]
         wx_main()
-        # run the LGBM 10-day prediction writer
-        sys.argv = ["forecast_10day", start, end]
-        fc_main()
+
+        # 2) run GAM predictor and write CSVs in the format this script expects
+        hourly_df, peaks_df = predict_10day_window(start, end)
+        # normalize column names for backward compatibility
+        hourly_df = hourly_df.rename(columns={"datetime_beginning_ept": "time_ept"})
+        peaks_df  = peaks_df.rename(columns={"is_peak_day": "peak_day_flag"})
+        hourly_df.to_csv(hourly, index=False)
+        peaks_df.to_csv(peaks, index=False)
     return hourly, peaks
 
 
