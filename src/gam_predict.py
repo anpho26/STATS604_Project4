@@ -1,4 +1,3 @@
-# src/gam_predict.py  (or src/models/gam_predict.py if you prefer)
 from __future__ import annotations
 from pathlib import Path
 import json
@@ -6,6 +5,7 @@ from typing import Dict, Tuple, List
 import numpy as np
 import pandas as pd
 from joblib import load
+from datetime import date, timedelta
 
 # training utilities
 from src.train_gam_skl import build_design
@@ -18,6 +18,70 @@ WX_FC_DIR = Path("data/raw/weather_forecast")
 PRED_DIR  = Path("data/predictions_10day"); PRED_DIR.mkdir(parents=True, exist_ok=True)
 
 # ---------------- helpers ----------------
+def thanksgiving_date(year: int) -> date:
+    """4th Thursday in November."""
+    d = date(year, 11, 1)
+    first_thu = d + timedelta(days=(3 - d.weekday()) % 7)
+    return first_thu + timedelta(weeks=3)
+
+def _is_tg_or_bf(d: date) -> bool:
+    """Return True if d is Thanksgiving or Black Friday for its year."""
+    tg = thanksgiving_date(d.year)
+    return (d == tg) or (d == tg + timedelta(days=1))
+
+def choose_peak_days_for_zone(
+    s: pd.Series,
+    k_min: int = 2,
+    k_max: int = 4,
+    ratio: float = 0.98,
+    exclude_thanksgiving: bool = True,
+) -> set:
+    """
+    s: Series indexed by python `date` with daily max load for ONE zone.
+    - Always pick at least k_min days.
+    - Optionally add more days nearly tied with #2 (within `ratio`), capped at k_max.
+    - If exclude_thanksgiving=True, never flag Thanksgiving.
+    """
+    s_sorted = s.sort_values(ascending=False)
+
+    # Build exclusion set
+    ex = set()
+    if exclude_thanksgiving:
+        ex = {thanksgiving_date(d.year) for d in s.index}
+
+    keep: list[date] = []
+
+    # 1) ensure k_min non-excluded days
+    for d, v in s_sorted.items():
+        if d in ex: 
+            continue
+        keep.append(d)
+        if len(keep) == k_min:
+            break
+
+    # In the very unlikely case we still don't have k_min (shouldn’t happen in a 10-day window),
+    # continue picking next best non-excluded days:
+    if len(keep) < k_min:
+        for d, v in s_sorted.items():
+            if d in keep or d in ex:
+                continue
+            keep.append(d)
+            if len(keep) == k_min:
+                break
+
+    # 2) near-ties w.r.t. the second kept value
+    m2 = float(s[keep[min(1, len(keep)-1)]])  # second kept (or first if only one)
+    for d, v in s_sorted.items():
+        if d in keep or d in ex:
+            continue
+        if len(keep) >= k_max:
+            break
+        if v >= ratio * m2:
+            keep.append(d)
+        else:
+            break
+
+    return set(keep)
 
 def _attach_temp_day_mean_forecast(df: pd.DataFrame) -> pd.DataFrame:
     """
@@ -176,14 +240,27 @@ def predict_10day_window(start: str, end: str) -> Tuple[pd.DataFrame, pd.DataFra
     idx = hourly.groupby(["zone","date"])["mw_pred"].idxmax()
     peak_hour = hourly.loc[idx, ["zone","date","hour"]].rename(columns={"hour":"peak_hour"})
 
-    # top-2 peak-day flag
+    # --- peak-day flags (exclude Thanksgiving & Black Friday) ---
     daymax = hourly.groupby(["zone","date"])["mw_pred"].max()
     flags = []
+    TOP_K = 3   # we’re allowed to guess >2; pick up to 3 best non-TG/BF days
+
     for z, g in daymax.groupby(level=0):
+        df = g.reset_index()                    # columns: ['zone','date','mw_pred'] (name of g is 'mw_pred')
+        valcol = g.name if g.name in df.columns else df.columns[-1]
+        # keep only non-holiday candidates
+        keep = df[~df["date"].map(_is_tg_or_bf)]
+        if keep.empty:                          # fallback: if ALL 10 days are TG/BF (unlikely), don't exclude
+            keep = df
+        chosen_idx = (keep.nlargest(TOP_K, valcol)
+                        .set_index(["zone","date"])
+                        .index)
         f = pd.Series(0, index=g.index, dtype=int)
-        f.loc[g.nlargest(2).index] = 1
+        f.loc[chosen_idx] = 1
         flags.append(f.rename("is_peak_day").reset_index())
+
     peaks = peak_hour.merge(pd.concat(flags, ignore_index=True), on=["zone","date"])
+
     return hourly, peaks
 
 # ------------- compatibility for print_predictions -------------

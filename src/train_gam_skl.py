@@ -1,4 +1,3 @@
-# src/train_gam_skl.py
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -274,6 +273,7 @@ def build_design(df: pd.DataFrame, K_hour: int = 3, K_doy: int = 2) -> Tuple[pd.
       - weekend/holiday dummies
       - year dummies
       - ONE numeric feature: temp_day_mean  (daily mean temp, broadcast to hours)
+      - NEW: holiday×hour interactions (TG/BF) with a small (low-rank) hour basis
     """
     t = pd.to_datetime(df["datetime_beginning_ept"])
     hour = t.dt.hour
@@ -282,16 +282,17 @@ def build_design(df: pd.DataFrame, K_hour: int = 3, K_doy: int = 2) -> Tuple[pd.
 
     X_parts: List[pd.DataFrame] = []
 
-    # cyclic seasonality
-    X_parts.append(fourier_cyclic(hour, period=24,     K=K_hour, prefix="hr"))
+    # cyclic seasonality (base intraday + annual)
+    H_base = fourier_cyclic(hour, period=24,     K=K_hour, prefix="hr")
+    X_parts.append(H_base)
     X_parts.append(fourier_cyclic(doy,  period=365.25, K=K_doy,  prefix="doy"))
 
-    # >>> daily mean temperature (single linear feature)
+    # required daily mean temperature
     if "temp_day_mean" not in df.columns:
         raise KeyError("build_design expects column 'temp_day_mean'")
     X_parts.append(pd.DataFrame({"temp_day_mean": df["temp_day_mean"].to_numpy(dtype=float)}))
 
-    # weekday/weekend + holidays
+    # weekday/weekend + holidays (level effects)
     dums = pd.DataFrame({
         "dow_1": (dow==1).astype(int),
         "dow_2": (dow==2).astype(int),
@@ -304,7 +305,22 @@ def build_design(df: pd.DataFrame, K_hour: int = 3, K_doy: int = 2) -> Tuple[pd.
     hol = holiday_flags(t)
     X_parts += [dums.reset_index(drop=True), hol.reset_index(drop=True)]
 
-    # year dummies (2024 baseline)
+    # --- NEW: holiday × hour-of-day (shape tweaks) ---------------------------
+    # keep it small: first two harmonics are usually enough to move the peak
+    K_hol = min(2, K_hour)
+    H_hol = fourier_cyclic(hour, period=24, K=K_hol, prefix="hrH").reset_index(drop=True)
+
+    tg = hol["is_thanksgiving"].astype(float).reset_index(drop=True)
+    bf = hol["is_blackfri"].astype(float).reset_index(drop=True)
+
+    # multiply each hour basis column by the holiday flags (elementwise)
+    X_parts.append(pd.DataFrame({f"{c}*TG": H_hol[c].to_numpy() * tg.to_numpy()
+                                 for c in H_hol.columns}))
+    X_parts.append(pd.DataFrame({f"{c}*BF": H_hol[c].to_numpy() * bf.to_numpy()
+                                 for c in H_hol.columns}))
+    # ------------------------------------------------------------------------
+
+    # year dummies (2024 is baseline)
     yy = t.dt.year
     years = pd.DataFrame({
         "yr_2022": (yy==2022).astype(int),

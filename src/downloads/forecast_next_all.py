@@ -1,4 +1,3 @@
-# src/downloads/forecast_next_all.py
 from datetime import date, timedelta
 import sys
 from src.downloads.weather_forecast import main as wx_main

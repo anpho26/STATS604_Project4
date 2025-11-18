@@ -1,4 +1,3 @@
-# src/downloads/weather_history.py
 # Fetch hourly Meteostat weather for zones in data/raw/zones_locations.csv
 # Writes one CSV per zone + a stations_map.csv
 

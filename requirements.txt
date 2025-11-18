@@ -9,3 +9,4 @@ lightgbm
 joblib
 patsy
 packaging
+matplotlib
