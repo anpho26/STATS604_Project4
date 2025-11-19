@@ -1,3 +1,27 @@
+"""
+Convenience: fetch the next 10 days of Open-Meteo forecasts for all zones.
+
+Purpose
+-------
+Compute a fixed window of [tomorrow .. tomorrow+9 days] and call the
+Open-Meteo fetcher for all zones. Intended for the daily prediction pipeline.
+
+Outputs
+-------
+- files under `data/raw/weather_forecast/` for each zone
+
+CLI
+---
+    python -m src.downloads.forecast_next_all
+
+Notes
+-----
+* Horizon length defaults to 10 days. You can change it by editing the module
+  or via an environment variable if implemented (e.g., `DAYS=10`).
+* This script is idempotent; re-running updates the same date window.
+"""
+
+
 from datetime import date, timedelta
 import sys
 from src.downloads.weather_forecast import main as wx_main

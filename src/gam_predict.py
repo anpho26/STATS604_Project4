@@ -1,3 +1,88 @@
+"""
+GAM-skl 10-day load forecaster (hourly predictions + peak-day flags).
+
+Purpose
+-------
+Produce hourly load forecasts for a fixed calendar window (typically the 10-day
+Thanksgiving window) for all zones with trained models, and mark candidate
+"peak" days. Can be used as a library (returns DataFrames) or as a CLI that
+also writes CSVs under `data/predictions_10day/`.
+
+Dependencies / Inputs
+---------------------
+1) Trained per-zone models and metadata (created by `src.train_gam_skl`):
+   - `data/models/gam_skl_{ZONE}.joblib`
+   - `data/models/gam_skl_{ZONE}.meta.json`
+     with keys:
+       * `hour_means_log1p` : dict[int -> float]  (same-hour log baseline)
+       * `delta`            : float               (last-14-days bias tweak)
+
+2) Weather forecast CSVs per zone (created by `src/downloads/weather_forecast.py`)
+   in `data/raw/weather_forecast/`, containing at least:
+   - `datetime_beginning_ept`  (or `time_ept`; UTC is ignored)
+   - `temperature_2m` (or `temp`)
+   - optional `zone` (filled from filename if missing)
+
+Outputs (library)
+-----------------
+`predict_10day_window(start, end) -> (hourly_df, peaks_df)`
+
+- `hourly_df` columns:
+    ['zone', 'datetime_beginning_ept', 'mw_pred', 'date', 'hour']
+- `peaks_df` columns:
+    ['zone', 'date', 'peak_hour', 'is_peak_day']
+
+Notes on behavior
+-----------------
+- The window is normalized to **[start, end + 1 day)** in EPT and an
+  *authoritative hourly grid* is built, ensuring 24 rows per zone×day.
+- Missing forecast temps are imputed by same-day mean, then ffill/bfill.
+- Design matrix comes from `src.train_gam_skl.build_design` and includes the
+  daily mean temperature feature that was used to train.
+- Predictions are produced in log-space with the saved hour offset + bias delta,
+  then exponentiated back to MW.
+
+Peak-day logic
+--------------
+- For each zone we compute the daily max `mw_pred`. We then flag up to TOP_K
+  (currently 3) largest days **excluding Thanksgiving and Black Friday** for
+  that year. (If exclusion removes all candidates, we fall back to the largest
+  days without exclusion.)
+- `is_peak_day` is 1 for flagged days, else 0.
+- `peak_hour` is the argmax hour within each zone×day (0..23).
+
+Convenience
+-----------
+`predict_all()` builds the [tomorrow .. +9 days] window from "now" and returns:
+    (loads, peak_hour, peak_day_flag)
+where `loads[z]` is a 24-length int array for tomorrow.
+
+CLI usage
+---------
+From the repo root:
+
+    # run as a script and write CSVs
+    python -m src.gam_predict 2025-11-21 2025-11-30
+
+This writes:
+    data/predictions_10day/hourly_2025-11-21_2025-11-30.csv
+    data/predictions_10day/peaks_2025-11-21_2025-11-30.csv
+
+Programmatic usage
+------------------
+    from src.gam_predict import predict_10day_window
+    hourly, peaks = predict_10day_window("2025-11-21", "2025-11-30")
+
+Assumptions & pitfalls
+----------------------
+- All times are **EPT**. If your forecast files only have UTC, convert upstream.
+- Models must exist for the zones you want; otherwise the zone is skipped with
+  a log message.
+- If any zone×day yields fewer than 24 rows after merging, we print a warning
+  listing the missing hours.
+"""
+
+
 from __future__ import annotations
 from pathlib import Path
 import json

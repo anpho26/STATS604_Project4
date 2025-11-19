@@ -14,6 +14,14 @@ RAW_WXF_DIR := data/raw/weather_forecast
 MODEL_DIR   := data/models
 PRED_DIR    := data/predictions_10day
 
+# -------- configurable knobs --------
+# Zone used for quick plots / notebook (you can override: `make ZONE=PEPCO`)
+ZONE ?= AECO
+
+# Notebook path + rendered output
+NB       := overview.ipynb
+NB_HTML  := data/figures/overview$(ZONE).html
+
 # Default 10-day window: tomorrow .. tomorrow+9  (inclusive by date)
 START ?= $(shell $(PY) -c 'from datetime import date,timedelta; s=date.today()+timedelta(days=1); print(s.isoformat())')
 END   ?= $(shell $(PY) -c 'from datetime import date,timedelta; s=date.today()+timedelta(days=1); print((s+timedelta(days=9)).isoformat())')
@@ -29,12 +37,12 @@ END   ?= $(shell $(PY) -c 'from datetime import date,timedelta; s=date.today()+t
 # ------------------------------------------------------------
 # Top-level
 # ------------------------------------------------------------
-all: train_gam_skl
-	@echo "[all] GAM models up to date in $(MODEL_DIR)"
+all: train_gam_skl predictions plots notebook
+	@echo "[all] done."
 
 help:
 	@echo "Usage:"
-	@echo "  make                         # train GAM models (no downloads)"
+	@echo "make                           # train + predictions + figures + notebook"
 	@echo "  make clean                   # remove models/predictions/processed"
 	@echo "  make rawdata                 # re-download weather history since 2021"
 	@echo "  make rawdata_weather START=YYYY-MM-DD END=YYYY-MM-DD ZONE=AECO"
@@ -114,11 +122,16 @@ train_gam_skl:
 forecast_10d_gam:
 	@ [ -n "$(START)" ] || (echo "START=YYYY-MM-DD required" && exit 2)
 	@ [ -n "$(END)"   ] || (echo "END=YYYY-MM-DD required" && exit 2)
-	$(PY) -m src.gam_predict $(START) $(END)
+	@$(PY) -m src.gam_predict $(START) $(END)
 
-# One-line CSV for tomorrow (uses your print_predictions script)
+# Fixed 10-day window you want to use for peak-day flags
+FIXED_START := 2025-11-20
+FIXED_END   := 2025-11-29
+
+# Still prints the one-line CSV for **tomorrow**,
+# but peak-day flag is computed from the fixed window.
 predictions:
-	@$(PY) -m src.print_predictions
+	@$(PY) -m src.print_predictions --fixed-start=$(FIXED_START) --fixed-end=$(FIXED_END)
 
 # Full daily pipeline for the (START..END) window:
 #   1) fetch forecasts for ALL zones
@@ -129,3 +142,24 @@ daily_10day:
 	$(PY) -m src.downloads.weather_forecast $(START) $(END) --all
 	$(PY) -m src.gam_predict $(START) $(END)
 	$(PY) -m src.print_predictions
+
+
+
+# ===== Quick plots for ONE zone (uses src/plots_gam.py) =====
+plots: figures
+	$(PY) -m src.plots_gam $(ZONE)
+
+figures:
+	mkdir -p data/figures
+
+# ===== Execute EDA notebook =====
+# Preferred: papermill (parameterize ZONE). Fallback: nbconvert.
+notebook: figures
+	@echo "[nb] executing $(NB) for ZONE=$(ZONE)…"
+	@if command -v papermill >/dev/null 2>&1; then \
+	  papermill "$(NB)" "$(NB_HTML)" -p ZONE "$(ZONE)"; \
+	  echo "[nb] wrote $(NB_HTML)"; \
+	else \
+	  echo "[nb] papermill not found; using nbconvert with notebook's default ZONE"; \
+	  jupyter nbconvert --to html --execute "$(NB)" --ExecutePreprocessor.kernel_name=python3 --output-dir=data/figures; \
+	fi

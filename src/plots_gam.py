@@ -1,3 +1,81 @@
+"""
+plots_gam.py — Visualization helpers for the GAM-skl power-load project.
+
+What this module does
+---------------------
+1) plot_2024_actual_vs_pred(zone) -> Path
+   • Builds an authoritative hourly grid over the 2024 Thanksgiving window (EPT),
+     merges Meteostat weather history, constructs the SAME design features used
+     during training (incl. daily-mean temperature), applies the trained
+     GAM-skl pipeline + hour offset + bias delta, and overlays:
+       – Actual hourly load (MW) for 2024
+       – Predicted hourly load (MW) for 2024
+     • Title includes RMSE and peak-hour (±1 hour) accuracy.
+     • Saves: data/figures/{ZONE}_2024_actual_vs_pred.png
+
+2) plot_2025_pred_vs_past(zone, years=[2022,2023,2024]) -> Path
+   • Calls src.gam_predict.predict_10day_window() to get 2025 hourly predictions
+     for the Thanksgiving 10-day window, then overlays the *actual* TG-window
+     hourly loads from each requested past year.
+   • All series are plotted against a common “Hour in window (0..239)” index.
+   • Saves: data/figures/{ZONE}_2025_pred_vs_past.png
+
+Inputs & requirements
+---------------------
+• Trained models & metadata (from src.train_gam_skl):
+    data/models/gam_skl_{ZONE}.joblib
+    data/models/gam_skl_{ZONE}.meta.json
+  – meta must include:
+      hour_means_log1p : dict[int -> float]  (same-hour log offset)
+      delta            : float               (last-14-days bias correction)
+
+• Historical data (hourly, EPT):
+    data/raw/power/hrl_load_metered_*.csv      (columns: zone, datetime_beginning_ept, mw)
+    data/raw/weather/*.csv                     (columns: zone, datetime_beginning_ept, temp or temperature_2m)
+
+• For 2025 overlay:
+    Weather forecast CSVs so that src.gam_predict.predict_10day_window() can
+    produce 2025 hourly predictions for the TG window.
+
+Feature construction (mirrors training)
+---------------------------------------
+• Time seasonality: Fourier bases of hour-of-day and day-of-year.
+• Calendar dummies: day-of-week, weekend, holidays (Thanksgiving/Black Friday).
+• Year dummies (2024 baseline).
+• Temperature driver: **daily mean temperature** (`temp_day_mean`) broadcast to
+  hours. If any hourly temps are missing, impute by same-day mean, then ffill/bfill.
+
+Computation details
+-------------------
+• Predictions are generated in log space with:
+      ŷ_log = model(X) + hour_offset[hour] + delta
+  then transformed back:  ŷ = expm1(ŷ_log).
+• Peak-hour (±1) accuracy on 2024 is computed by comparing the hour of the
+  daily maxima in actual vs predicted series.
+
+Assumptions & caveats
+---------------------
+• All timestamps are **EPT** (DST-aware). UTC columns are ignored here.
+• The module constructs an authoritative hourly grid to avoid join-gaps;
+  missing weather is imputed as described above.
+• If power data are missing for some hours/years, the line for that year may
+  show gaps (NaNs) unless you uncomment the interpolation note in code.
+
+CLI usage
+---------
+From repo root:
+
+    python -m src.plots_gam AECO
+    python -m src.plots_gam AECO --years 2022 2023 2024
+
+This writes two PNGs under data/figures/ and prints their paths.
+
+Returns
+-------
+Both plotting functions return the filesystem Path of the written PNG.
+"""
+
+
 from __future__ import annotations
 from pathlib import Path
 from typing import List, Tuple, Dict

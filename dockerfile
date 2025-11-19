@@ -5,7 +5,6 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app
 
-# make for targets, libgomp for LightGBM wheels, tzdata for time-handling
 RUN apt-get update && apt-get install -y --no-install-recommends \
       make libgomp1 tzdata ca-certificates \
     && rm -rf /var/lib/apt/lists/*

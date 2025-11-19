@@ -1,7 +1,49 @@
-# Fetch hourly forecast from Open-Meteo for zones in data/raw/zones_locations.csv
-# Output: data/raw/weather_forecast/openmeteo_forecast_<ZONE>_<START>_<END>.csv
-# Columns start with PJM-style time headers:
-#   datetime_beginning_utc, datetime_beginning_ept
+"""
+Open-Meteo hourly forecast (rolling horizon).
+
+Purpose
+-------
+Fetch hourly forecast for a fixed window (e.g., 10 days around Thanksgiving)
+for one zone or all zones. Outputs align on `datetime_beginning_ept`.
+
+Inputs
+------
+- `data/raw/zones_locations.csv`  (zone code → lat/lon)
+
+Outputs
+-------
+- `data/raw/weather_forecast/openmeteo_{ZONE}_{START}_{END}.csv`
+
+Columns (typical)
+-----------------
+`datetime_beginning_utc, datetime_beginning_ept, temperature_2m (or temp),
+ relative_humidity_2m, apparent_temperature, precipitation, weathercode,
+ windspeed_10m`, …
+
+CLI
+---
+From repo root:
+
+    # One zone
+    python -m src.downloads.weather_forecast 2025-11-21 2025-11-30 AECO
+
+    # All zones
+    python -m src.downloads.weather_forecast 2025-11-21 2025-11-30 --all
+
+Args
+----
+start : YYYY-MM-DD
+end   : YYYY-MM-DD (inclusive)
+zone  : str, optional
+--all : flag, fetch for all zones
+
+Notes
+-----
+* Open-Meteo is rolling; re-running on a later date can change values for the
+  same future hour.
+* We de-duplicate rows by (zone, timestamp) if the provider returns overlaps.
+* Forecast files are used by `src/gam_predict.py` for 10-day predictions.
+"""
 
 from pathlib import Path
 from datetime import datetime

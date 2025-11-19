@@ -1,100 +1,150 @@
+"""
+print_predictions.py — Emit the assignment’s single-line CSV for “tomorrow”
+
+What it does
+------------
+• Computes **tomorrow’s** 24 hourly load predictions per zone using
+  `src.gam_predict.predict_10day_window(...)` with a 24h window anchored at
+  tomorrow (local **US/Eastern**, EPT).
+• Derives **tomorrow’s peak hour** per zone from those 24 values.
+• Marks whether **tomorrow is a peak day** using either:
+    (A) a **fixed** 10-day window passed via --fixed-start/--fixed-end, or
+    (B) a **rolling** 10-day window [tomorrow .. tomorrow+9] (fallback).
+
+Output format (to STDOUT)
+-------------------------
+A single CSV line:
+  "YYYY-MM-DD",  ⟨24×|ZONES| hourly loads⟩,  ⟨|ZONES| peak hours⟩,  ⟨|ZONES| peak-day flags⟩
+
+• Date is tomorrow’s date in ISO (quotes kept).
+• Hourly loads are integers (rounded), ordered by `ZONES` and hour 00..23.
+• Peak hour is the argmax hour (0..23) for tomorrow per zone.
+• Peak-day flag is 1 if tomorrow is flagged as a peak day within the chosen
+  10-day window, else 0.
+
+Key details & assumptions
+-------------------------
+• Timezone: all timestamps are **EPT** (America/New_York / DST-aware).
+• This script **does not write files** by itself; it prints to stdout so you
+  can redirect in a Makefile, e.g.
+      make predictions
+      # internally:
+      #   python -m src.print_predictions --fixed-start=YYYY-MM-DD --fixed-end=YYYY-MM-DD \
+      #     > data/predictions_10day/one_line_$(date +%F).csv
+• Zones order comes from `src.gam_predict.ZONES` (or auto-discovered if empty).
+
+CLI
+---
+    python -m src.print_predictions \
+        --fixed-start 2025-11-21 --fixed-end 2025-11-30
+
+Optional flags
+--------------
+--fixed-start / --fixed-end : lock the peak-day window to a specific range.
+--k                         : desired Top-K peak days (default 2).  Note:
+                              in the current code path, the Top-K selection
+                              is implemented inside `src.gam_predict` and this
+                              flag is informational unless you wire it through.
+
+Dependencies
+------------
+• Trained models & metadata under data/models/ (produced by src.train_gam_skl).
+• Forecast inputs under data/raw/weather_forecast/ consumed by src.gam_predict.
+"""
+
+
 from __future__ import annotations
 from pathlib import Path
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
+import argparse
 import sys
+import numpy as np
 import pandas as pd
 
-# from src.forecast10days import main as fc_main
 from src.gam_predict import predict_10day_window, ZONES
 
-# call existing modules programmatically
-from src.downloads.weather_forecast import main as wx_main
-
-PRED_DIR = Path("data/predictions_10day")
+PRED_DIR = Path("data/predictions_10day"); PRED_DIR.mkdir(parents=True, exist_ok=True)
 EASTERN = ZoneInfo("America/New_York")
 
-
-def ensure_window(start: str, end: str) -> tuple[Path, Path]:
-    """Make sure hourly_ and peaks_ CSVs for [start,end] exist; build if not."""
-    PRED_DIR.mkdir(parents=True, exist_ok=True)
-    hourly = PRED_DIR / f"hourly_{start}_{end}.csv"
-    peaks  = PRED_DIR / f"peaks_{start}_{end}.csv"
-    if not (hourly.exists() and peaks.exists()):
-        # 1) fetch forecast for all zones
-        sys.argv = ["weather_forecast", start, end, "--all"]
-        wx_main()
-
-        # 2) run GAM predictor and write CSVs in the format this script expects
-        hourly_df, peaks_df = predict_10day_window(start, end)
-        # normalize column names for backward compatibility
-        hourly_df = hourly_df.rename(columns={"datetime_beginning_ept": "time_ept"})
-        peaks_df  = peaks_df.rename(columns={"is_peak_day": "peak_day_flag"})
-        hourly_df.to_csv(hourly, index=False)
-        peaks_df.to_csv(peaks, index=False)
-    return hourly, peaks
-
-
 def main():
-    # Tomorrow in US/Eastern for the header date and for selecting rows
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--fixed-start", type=str, default=None,
+                    help="YYYY-MM-DD start for fixed peak-day window")
+    ap.add_argument("--fixed-end", type=str, default=None,
+                    help="YYYY-MM-DD end for fixed peak-day window")
+    ap.add_argument("--k", type=int, default=2, help="Top-K peak days (default 2)")
+    args = ap.parse_args()
+
+    # Tomorrow (local Eastern)
     target = (datetime.now(EASTERN).date() + timedelta(days=1))
-    start  = target.isoformat()
-    end    = (target + timedelta(days=9)).isoformat()
+    t_start = pd.Timestamp(target)            # 00:00 of tomorrow
+    t_end   = pd.Timestamp(target)            # pass same day → 24h grid inside predict_10day_window()
 
-    hourly_path, peaks_path = ensure_window(start, end)
+    # 1) Get **tomorrow’s** 24 hourly loads & peak-hour (window = that single day)
+    hourly_tomorrow, peaks_dummy = predict_10day_window(t_start.isoformat(), t_end.isoformat())
+    if hourly_tomorrow.empty:
+        print("[predictions] no hourly predictions for tomorrow.")
+        return
 
-    # Load predictions
-    hourly = pd.read_csv(hourly_path, parse_dates=["time_ept"])
-    peaks  = pd.read_csv(peaks_path)
-    # Normalize date typing
-    if "date" in peaks.columns:
-        peaks["date"] = pd.to_datetime(peaks["date"]).dt.date
+    hourly_tomorrow["date"] = hourly_tomorrow["datetime_beginning_ept"].dt.date
+    hourly_tomorrow["hour"] = hourly_tomorrow["datetime_beginning_ept"].dt.hour
 
-    # Filter to the target day
-    day = hourly[hourly["time_ept"].dt.date == target].copy()
+    # Peak hour for tomorrow from those 24 values
+    idx = hourly_tomorrow.groupby(["zone","date"])["mw_pred"].idxmax()
+    peak_hour_tom = (hourly_tomorrow.loc[idx, ["zone","date","hour"]]
+                                    .rename(columns={"hour":"peak_hour"}))
 
-    # Build dictionaries for 24 hourly loads, peak hour, peak-day flag
-    loads_by_zone: dict[str, list[int]] = {}
-    ph_by_zone: dict[str, int] = {}
-    pd_by_zone: dict[str, int] = {}
+    # 2) Peak-day flag from a **fixed** window, if provided; else keep the rolling (tomorrow..+9) logic
+    if args.fixed_start and args.fixed_end:
+        fx_start = pd.Timestamp(args.fixed_start).normalize()
+        fx_end   = pd.Timestamp(args.fixed_end).normalize()
+        hourly_fixed, peaks_fixed = predict_10day_window(fx_start.isoformat(), fx_end.isoformat())
+        if peaks_fixed.empty:
+            # no flags available → default to 0
+            peaks_fixed = pd.DataFrame(columns=["zone","date","is_peak_day"])
+        # keep only the K largest days per zone (peaks_fixed already marks top-K in our implementation;
+        # if not, recompute here by grouping day maxima and flagging nlargest(K))
+        peak_flags = peaks_fixed.copy()
+    else:
+        # fallback: rolling 10-day window starting tomorrow (original assignment behavior)
+        roll_start = t_start
+        roll_end   = (t_start + pd.Timedelta(days=9))
+        _, peaks_roll = predict_10day_window(roll_start.isoformat(), roll_end.isoformat())
+        peak_flags = peaks_roll
 
-    # peaks file: one row per zone/date with peak_hour and peak_day_flag
-    peaks_t = peaks[peaks["date"] == target]
-    if not peaks_t.empty:
-        ph_by_zone.update({r["zone"]: int(r["peak_hour"]) for _, r in peaks_t.iterrows()})
-        pd_by_zone.update({r["zone"]: int(r["peak_day_flag"]) for _, r in peaks_t.iterrows()})
+    # Build the one-line CSV for the grader
+    zones = ZONES if ZONES else sorted(hourly_tomorrow["zone"].unique())
 
-    for z in ZONES:
-        d = day[day["zone"] == z].sort_values("time_ept")
-        # 24 hourly loads; round to nearest int
-        s = d["mw_pred"].round().astype("Int64") if not d.empty else pd.Series([0]*24)
-        # If somehow fewer than 24 hours, pad with zeros
+    # 24 hourly loads for tomorrow per zone
+    loads_by_zone = {}
+    for z in zones:
+        g = hourly_tomorrow[(hourly_tomorrow["zone"] == z) & (hourly_tomorrow["date"] == target)].sort_values("hour")
+        s = g["mw_pred"].round().astype("Int64") if not g.empty else pd.Series([0]*24)
         if len(s) < 24:
             s = pd.concat([s, pd.Series([0]*(24-len(s)))], ignore_index=True)
         else:
             s = s.iloc[:24]
         loads_by_zone[z] = [int(x) for x in s.to_list()]
 
-        # Fallback peak hour if missing: argmax of the 24h loads
-        if z not in ph_by_zone and not d.empty:
-            ph_by_zone[z] = int(d.loc[d["mw_pred"].idxmax(), "time_ept"].hour)
-        if z not in pd_by_zone:
-            pd_by_zone[z] = 0
+    # peak hour (tomorrow) per zone
+    ph_by_zone = {}
+    for z in zones:
+        row = peak_hour_tom[(peak_hour_tom["zone"] == z) & (peak_hour_tom["date"] == target)]
+        ph_by_zone[z] = int(row["peak_hour"].iloc[0]) if not row.empty else 0
 
-    # Assemble required one-line CSV
-    cells = [f"\"{target.isoformat()}\""]  # "YYYY-MM-DD"
-    # L1_00..L1_23, L2_00.., ..., L29_23
-    for z in ZONES:
-        cells.extend(str(v) for v in loads_by_zone[z])
-    # PH_1..PH_29
-    for z in ZONES:
-        cells.append(str(ph_by_zone.get(z, 0)))
-    # PD_1..PD_29
-    for z in ZONES:
-        cells.append(str(pd_by_zone.get(z, 0)))
+    # peak-day flag from fixed/rolling window: 1 if tomorrow is flagged in that window (else 0)
+    pd_by_zone = {}
+    for z in zones:
+        row = peak_flags[(peak_flags["zone"] == z) & (peak_flags["date"] == target)]
+        pd_by_zone[z] = int(row["is_peak_day"].iloc[0]) if not row.empty else 0
 
+    # Emit the required single line
+    cells = [f"\"{target.isoformat()}\""]
+    for z in zones: cells.extend(str(v) for v in loads_by_zone[z])  # 29×24
+    for z in zones: cells.append(str(ph_by_zone.get(z, 0)))         # 29
+    for z in zones: cells.append(str(pd_by_zone.get(z, 0)))         # 29
     print(", ".join(cells))
-
 
 if __name__ == "__main__":
     main()

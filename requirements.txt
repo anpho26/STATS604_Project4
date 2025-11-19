@@ -10,3 +10,4 @@ joblib
 patsy
 packaging
 matplotlib
+IPython

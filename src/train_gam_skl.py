@@ -1,3 +1,84 @@
+"""
+train_gam_skl.py — Fit per-zone ridge “GAM-sklearn” with an hourly offset, and pick α by a
+2024 Thanksgiving backtest. Produces .joblib/.json artifacts for inference.
+
+What this module does
+---------------------
+1) Load data
+   • PJM metered load from data/raw/power/hrl_load_metered_*.csv
+     – Zone identifier prefers column “load_area” (falls back to “zone”).
+     – Timestamp column must be “datetime_beginning_ept” (EPT/DST-aware).
+     – MW column “mw” (or “load”, which is renamed).
+   • Meteostat hourly weather from data/raw/weather/*.csv
+     – Columns: zone, datetime_beginning_ept, temp (or temperature_2m→temp).
+
+2) Feature engineering (build_design)
+   • Intraday seasonality: Fourier hour terms (K_hour pairs).
+   • Annual seasonality: Fourier day-of-year (K_doy pairs).
+   • Calendar: weekday dummies; holiday flags (Veterans, Thanksgiving, Black Friday).
+   • Holiday×hour interactions: low-rank (first 1–2 harmonics) to reshape the daily profile
+     specifically on TG/BF.
+   • Year dummies (2024 is baseline).
+   • Weather: ONE numeric feature = daily mean temperature, temp_day_mean, broadcast to
+     all 24 hours of the day (computed by attach_temp_day_mean).
+
+3) Offset + target (stabilization)
+   • Per-row hour offset: per_row_hour_offset(df) = log1p(rolling mean of the previous
+     14 same-hour loads). This soaks up the strong hour-of-day level.
+   • Regression target: y = log1p(mw) − offset. We fit on standardized X.
+
+4) α-selection by 2024 backtest (pick_alpha_for_zone)
+   • Train set: Sep–Nov of 2022–2024 up to cutoff_before_window(2024, embargo=2d).
+   • Validation window: tg_window(2024) (10 consecutive days around TG week).
+   • Ridge(α) on StandardScaler(X); choose α minimizing validation RMSE.
+   • Also report:
+       – Peak-hour ±1 accuracy: peak_hour_accuracy_pm1 (fraction in [0,1]).
+       – Peak-day cost: peak_day_cost (missed=4, extra=1) for 2-day selection.
+   • A compact CV table is appended to data/models/gam_skl_cv_report.csv.
+
+5) Final 2025 fit (train_zone_2025)
+   • Train set: Sep–Nov of 2023–2025 up to cutoff_before_window(2025, embargo=2d).
+   • Fit Pipeline(StandardScaler, Ridge(α*)).
+   • Compute:
+       – hour_means_log1p: fixed_hour_offset(last ~14 same-hour means) for inference offsets.
+       – delta: mean_log_residual_last14 (bias correction in log-space at predict time).
+   • Save artifacts per zone to data/models/:
+       – gam_skl_<ZONE>.joblib    (the sklearn Pipeline)
+       – gam_skl_<ZONE>.meta.json {"columns", "alpha", "cutoff",
+                                  "hour_means_log1p", "delta"}
+   • Also writes a manifest: data/models/gam_skl_manifest.json.
+
+Key time windows & helpers
+--------------------------
+• thanksgiving_date(y): 4th Thursday in November.
+• tg_window(y): 10-day window ending Saturday of TG week (inclusive).
+• cutoff_before_window(y, embargo=2): last timestamp allowed in training
+  (y-window start minus `embargo` days, at 23:59:59).
+• is_fall(ts): Sep–Nov mask.
+
+CLI
+---
+Run all zones (optionally restricted by src.constants.ZONES):
+
+    python -m src.train_gam_skl
+
+Outputs
+-------
+• Trained models: data/models/gam_skl_<ZONE>.joblib
+• Metadata:       data/models/gam_skl_<ZONE>.meta.json
+• CV report:      data/models/gam_skl_cv_report.csv
+• Manifest:       data/models/gam_skl_manifest.json
+
+Assumptions & notes
+-------------------
+• All timestamps are EPT; this code never converts from UTC here.
+• Requires temp_day_mean to exist before build_design (use attach_temp_day_mean).
+• If a zone lacks enough rows after joins/filters, the code prints diagnostics
+  (diagnose_zone) and skips it.
+• Deterministic (no randomness); results depend only on input data.
+"""
+
+
 from __future__ import annotations
 
 from dataclasses import dataclass

@@ -1,5 +1,48 @@
-# Fetch hourly Meteostat weather for zones in data/raw/zones_locations.csv
-# Writes one CSV per zone + a stations_map.csv
+"""
+Meteostat hourly weather history (EPT).
+
+Purpose
+-------
+Fetch hourly weather history from Meteostat for one zone or all zones across a
+date range. The script writes per-zone CSVs with both UTC and EPT timestamps
+(we model on `datetime_beginning_ept` downstream).
+
+Inputs
+------
+- `data/raw/zones_locations.csv`  (zone code → lat/lon)
+
+Outputs
+-------
+- `data/raw/weather/meteostat_{ZONE}_{START}_{END}.csv`
+
+Columns (typical)
+-----------------
+`datetime_beginning_utc, datetime_beginning_ept, temp, dwpt, rhum, prcp, snow,
+ wdir, wspd, wpgt, pres, tsun, coco`
+
+CLI
+---
+From repo root:
+
+    # One zone
+    python -m src.downloads.weather_history 2021-01-01 2025-11-10 AECO
+
+    # All zones listed in zones_locations.csv
+    python -m src.downloads.weather_history 2021-01-01 2025-11-10 --all
+
+Args
+----
+start : YYYY-MM-DD
+end   : YYYY-MM-DD (inclusive)
+zone  : str, optional
+--all : flag, fetch for all zones instead of a single zone
+
+Notes
+-----
+* All files include both UTC and **EPT** (Eastern Prevailing Time).
+* Rate limiting: if you hit HTTP 429, re-run after a short pause.
+* Re-running will append/overwrite the same output file name for the range.
+"""
 
 from pathlib import Path
 from datetime import datetime
